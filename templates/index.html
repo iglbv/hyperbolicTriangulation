@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Гиперболическая триангуляция</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>Гиперболическая триангуляция</h1>
+            <p class="subtitle">Визуализация геометрии Лобачевского в модели Пуанкаре</p>
+        </header>
+
+        <div class="app-container">
+            <div class="visualization-section">
+                <div id="canvas-container">
+                    <canvas id="hyperbolic-canvas" width="500" height="500"></canvas>
+                </div>
+            </div>
+
+            <div class="controls-section">
+                <div class="controls">
+                    <button id="triangulate-btn">
+                        Триангулировать
+                    </button>
+                    <button id="clear-btn">
+                        Очистить
+                    </button>
+                </div>
+
+                <div class="info-panel">
+                    <div class="info-header">
+                        <span class="info-title">Информация</span>
+                        <span class="point-count" id="point-count">0</span>
+                    </div>
+
+                    <div class="distance-matrix-container">
+                        <table class="distance-table" id="distance-table">
+                        </table>
+                    </div>
+                    <div id="error-message"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('hyperbolic-canvas');
+        const ctx = canvas.getContext('2d');
+        const triangulateBtn = document.getElementById('triangulate-btn');
+        const clearBtn = document.getElementById('clear-btn');
+        const pointCountSpan = document.getElementById('point-count');
+        const distanceTable = document.getElementById('distance-table');
+        const errorMessageDiv = document.getElementById('error-message');
+
+        let points = [];
+        let triangles = [];
+
+        function drawPoincareDisk() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.beginPath();
+            ctx.arc(250, 250, 200, 0, 2 * Math.PI);
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(50, 250);
+            ctx.lineTo(450, 250);
+            ctx.moveTo(250, 50);
+            ctx.lineTo(250, 450);
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.1)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+        }
+
+        function drawPoints() {
+            ctx.fillStyle = 'var(--primary)';
+            for (let i = 0; i < points.length; i++) {
+                const p = points[i];
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 6, 0, 2 * Math.PI);
+                ctx.fill();
+
+                ctx.fillStyle = 'var(--dark)';
+                ctx.font = 'bold 14px Arial';
+                ctx.fillText(i, p.x + 12, p.y - 12);
+                ctx.fillStyle = 'var(--primary)';
+            }
+        }
+
+        function drawTriangulation() {
+            if (triangles.length === 0) return;
+
+            ctx.strokeStyle = 'var(--accent)';
+            ctx.lineWidth = 2;
+            ctx.fillStyle = 'rgba(72, 149, 239, 0.1)';
+
+            for (const triangle of triangles) {
+                if (triangle.some(idx => idx >= points.length)) {
+                    continue;
+                }
+
+                const p1 = points[triangle[0]];
+                const p2 = points[triangle[1]];
+                const p3 = points[triangle[2]];
+
+                ctx.beginPath();
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+                ctx.lineTo(p3.x, p3.y);
+                ctx.closePath();
+                ctx.fill();
+
+                ctx.beginPath();
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+                ctx.lineTo(p3.x, p3.y);
+                ctx.closePath();
+                ctx.stroke();
+            }
+        }
+
+        function updateUI() {
+            pointCountSpan.textContent = points.length;
+            drawPoincareDisk();
+            drawPoints();
+            drawTriangulation();
+        }
+
+        canvas.addEventListener('click', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            const dx = x - 250;
+            const dy = y - 250;
+            const distSq = dx * dx + dy * dy;
+
+            if (distSq < 200 * 200 && distSq > 10 * 10) {
+                points.push({ x, y });
+                triangles = [];
+                errorMessageDiv.style.display = 'none';
+                updateUI();
+            } else if (distSq <= 10 * 10) {
+                errorMessageDiv.textContent = 'Пожалуйста, ставьте точки дальше от центра';
+                errorMessageDiv.style.display = 'block';
+            }
+        });
+
+        triangulateBtn.addEventListener('click', async () => {
+            if (points.length < 3) {
+                errorMessageDiv.textContent = 'Нужно как минимум 3 точки для триангуляции';
+                errorMessageDiv.style.display = 'block';
+                return;
+            }
+
+            try {
+                triangulateBtn.disabled = true;
+                triangulateBtn.textContent = 'Вычисляем...';
+
+                const response = await fetch('/triangulate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ points }),
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    triangles = data.triangles.filter(t =>
+                        t.every(idx => idx < points.length));
+
+                    if (triangles.length === 0) {
+                        errorMessageDiv.textContent = 'Не удалось построить триангуляцию для этих точек';
+                        errorMessageDiv.style.display = 'block';
+                        return;
+                    }
+
+                    // Обновляем таблицу расстояний
+                    let html = '<thead><tr><th>Точки</th>';
+                    for (let i = 0; i < points.length; i++) {
+                        html += `<th>${i}</th>`;
+                    }
+                    html += '</tr></thead><tbody>';
+
+                    for (let i = 0; i < points.length; i++) {
+                        html += `<tr><th>${i}</th>`;
+                        for (let j = 0; j < points.length; j++) {
+                            const distance = data.distances[i][j];
+                            html += `<td>${distance.toFixed(3)}</td>`;
+                        }
+                        html += '</tr>';
+                    }
+                    html += '</tbody>';
+
+                    distanceTable.innerHTML = html;
+                    errorMessageDiv.style.display = 'none';
+                    updateUI();
+                } else {
+                    errorMessageDiv.textContent = `Ошибка: ${data.error}`;
+                    errorMessageDiv.style.display = 'block';
+                }
+            } catch (error) {
+                console.error('Ошибка:', error);
+                errorMessageDiv.textContent = 'Ошибка при выполнении триангуляции';
+                errorMessageDiv.style.display = 'block';
+            } finally {
+                triangulateBtn.disabled = false;
+                triangulateBtn.textContent = 'Триангулировать';
+            }
+        });
+
+        clearBtn.addEventListener('click', () => {
+            points = [];
+            triangles = [];
+            distanceTable.innerHTML = '';
+            errorMessageDiv.style.display = 'none';
+            updateUI();
+        });
+
+        updateUI();
+    </script>
+</body>
+
+</html>
